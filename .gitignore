@@ -1,0 +1,3 @@
+# 原始 secret 檔案，只存本機，不進 Git
+00-base/cloudflare/cloudflare-secrets.yaml
+01-configs/grafana/secrets.yaml
