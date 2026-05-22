@@ -11,6 +11,6 @@ data:
         uid: prometheus-ds
         type: prometheus
         access: proxy
-        url: http://prometheus-server.monitoring.svc:9090
+        url: http://prometheus-server.monitoring.svc:80
         isDefault: true
         editable: true
