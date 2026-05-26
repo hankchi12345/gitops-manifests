@@ -1,17 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: prometheus
+  name: grafana
   namespace: argocd
 spec:
   project: default
   sources:
-    - repoURL: https://prometheus-community.github.io/helm-charts
-      chart: prometheus
-      targetRevision: "27.x.x"
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: grafana
+      targetRevision: "8.x.x"
       helm:
         valueFiles:
-          - $values/02-helm-values/prometheus/values.yaml
+          - $values/clusters/CLUSTER_ID/02-helm-values/grafana/values.yaml
     - repoURL: https://github.com/hankchi12345/gitops-manifests.git
       targetRevision: HEAD
       ref: values

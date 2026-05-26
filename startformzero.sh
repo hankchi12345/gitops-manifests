@@ -12,7 +12,7 @@ die()  { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 wait_deploy() {
   local ns=$1 name=$2
-  log "Waiting for deployment $name in $ns..."
+  log "Waiting for deployment/$name in $ns..."
   kubectl rollout status deployment/"$name" -n "$ns" --timeout=300s
 }
 
@@ -25,12 +25,19 @@ echo "╔═══════════════════════�
 echo "║     GitOps Monitoring Stack - Bootstrap  ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
-read -rp  "Grafana admin username   : " GRAFANA_USER
-read -rsp "Grafana admin password   : " GRAFANA_PASS; echo
-read -rsp "Cloudflare tunnel token  : " CF_TOKEN;     echo
-read -rp  "GitHub username          : " GITHUB_USER
-read -rsp "GitHub personal token    : " GITHUB_TOKEN; echo
+read -rp  "Cluster name (e.g. m1, prod, lab) : " CLUSTER_NAME
+RANDOM_SUFFIX=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 5)
+CLUSTER_ID="${CLUSTER_NAME}-${RANDOM_SUFFIX}"
+echo "      → Cluster ID: ${CLUSTER_ID}"
 echo ""
+read -rp  "Grafana admin username             : " GRAFANA_USER
+read -rsp "Grafana admin password             : " GRAFANA_PASS; echo
+read -rsp "Cloudflare tunnel token            : " CF_TOKEN;     echo
+read -rp  "GitHub username                    : " GITHUB_USER
+read -rsp "GitHub personal token              : " GITHUB_TOKEN; echo
+echo ""
+
+CLUSTER_DIR="$REPO_DIR/clusters/$CLUSTER_ID"
 
 # ── Phase 0: DNS fix ──────────────────────────────────────────────
 log "Phase 0: DNS — writing /etc/k3s-resolv.conf"
@@ -44,7 +51,7 @@ if ! command -v kubectl &>/dev/null; then
   log "Phase 1: Installing k3s..."
   curl -sfL https://get.k3s.io | sh -s - server \
     --write-kubeconfig-mode 644 \
-    --node-name k3s-master \
+    --node-name "$CLUSTER_ID" \
     --resolv-conf /etc/k3s-resolv.conf
   log "Waiting for node to be Ready..."
   until kubectl get node 2>/dev/null | grep -q " Ready"; do sleep 3; done
@@ -88,7 +95,7 @@ fi
 
 wait_deploy kube-system sealed-secrets
 
-# ── Phase 4: Clone repo ───────────────────────────────────────────
+# ── Phase 4: Clone / pull repo ────────────────────────────────────
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   log "Phase 4: Cloning repo..."
   git clone "$REPO_URL" "$REPO_DIR"
@@ -97,8 +104,16 @@ else
   git -C "$REPO_DIR" pull
 fi
 
-# ── Phase 5: Create plaintext secrets (local only, never in git) ──
-log "Phase 5: Writing plaintext secrets to /root/secrets-backup/"
+# ── Phase 5: Create cluster directory from template ───────────────
+log "Phase 5: Creating cluster directory clusters/$CLUSTER_ID ..."
+cp -r "$REPO_DIR/template" "$CLUSTER_DIR"
+
+# Substitute CLUSTER_ID placeholder in ArgoCD app files
+sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/prometheus.yaml"
+sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/grafana.yaml"
+
+# ── Phase 6: Create plaintext secrets (local only, never in git) ──
+log "Phase 6: Writing plaintext secrets to /root/secrets-backup/"
 mkdir -p /root/secrets-backup
 
 cat > /root/secrets-backup/grafana-secrets.yaml << EOF
@@ -126,67 +141,60 @@ EOF
 
 chmod 600 /root/secrets-backup/*.yaml
 
-# ── Phase 6: Seal secrets ─────────────────────────────────────────
-log "Phase 6: Sealing secrets..."
+# ── Phase 7: Seal secrets into cluster directory ──────────────────
+log "Phase 7: Sealing secrets into clusters/$CLUSTER_ID ..."
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
   < /root/secrets-backup/grafana-secrets.yaml \
-  > "$REPO_DIR/01-configs/grafana/sealed-secrets.yaml"
+  > "$CLUSTER_DIR/01-configs/grafana/sealed-secrets.yaml"
 
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
   < /root/secrets-backup/cloudflare-secrets.yaml \
-  > "$REPO_DIR/00-base/cloudflare/cloudflare-sealed-secrets.yaml"
+  > "$CLUSTER_DIR/00-base/cloudflare/cloudflare-sealed-secrets.yaml"
 
-# ── Phase 7: Push sealed secrets to git ──────────────────────────
-log "Phase 7: Pushing sealed secrets to git..."
+# ── Phase 8: Push cluster directory to git ────────────────────────
+log "Phase 8: Pushing clusters/$CLUSTER_ID to git..."
 git -C "$REPO_DIR" config user.email "setup@k3s-bootstrap"
 git -C "$REPO_DIR" config user.name  "Bootstrap Script"
 git -C "$REPO_DIR" remote set-url origin \
   "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/hankchi12345/gitops-manifests.git"
 
-git -C "$REPO_DIR" add \
-  01-configs/grafana/sealed-secrets.yaml \
-  00-base/cloudflare/cloudflare-sealed-secrets.yaml
+git -C "$REPO_DIR" add "clusters/$CLUSTER_ID"
+git -C "$REPO_DIR" commit -m "chore: add cluster $CLUSTER_ID"
+git -C "$REPO_DIR" push
 
-if git -C "$REPO_DIR" diff --cached --quiet; then
-  warn "Phase 7: Sealed secrets unchanged, no commit needed"
-else
-  git -C "$REPO_DIR" commit -m "chore: reseal secrets for new cluster"
-  git -C "$REPO_DIR" push
-fi
+# ── Phase 9: Apply base infrastructure ───────────────────────────
+log "Phase 9: Applying base infrastructure..."
+kubectl apply -f "$CLUSTER_DIR/00-base/namespace.yaml"
+kubectl apply -f "$CLUSTER_DIR/00-base/pvc.yaml"
+kubectl apply -f "$CLUSTER_DIR/00-base/quota.yaml"
+kubectl apply -f "$CLUSTER_DIR/00-base/cloudflare/"
+kubectl apply --server-side -k "$CLUSTER_DIR/01-configs/grafana/"
 
-# ── Phase 8: Apply base infrastructure ───────────────────────────
-log "Phase 8: Applying base infrastructure..."
-kubectl apply -f "$REPO_DIR/00-base/namespace.yaml"
-kubectl apply -f "$REPO_DIR/00-base/pvc.yaml"
-kubectl apply -f "$REPO_DIR/00-base/quota.yaml"
-kubectl apply -f "$REPO_DIR/00-base/cloudflare/"
-kubectl apply --server-side -k "$REPO_DIR/01-configs/grafana/"
-
-# ── Phase 9: Install ArgoCD ───────────────────────────────────────
+# ── Phase 10: Install ArgoCD ──────────────────────────────────────
 if ! kubectl get namespace argocd &>/dev/null; then
-  log "Phase 9: Installing ArgoCD..."
+  log "Phase 10: Installing ArgoCD..."
   kubectl create namespace argocd
   kubectl apply -n argocd \
     -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-  log "Phase 9: Waiting for ArgoCD CRDs..."
+  log "Phase 10: Waiting for ArgoCD CRDs..."
   until kubectl get crd applications.argoproj.io &>/dev/null; do sleep 3; done
   sleep 10
 
-  log "Phase 9: Restarting applicationset-controller (CRD race fix)..."
+  log "Phase 10: Restarting applicationset-controller (CRD race fix)..."
   kubectl rollout restart deployment -n argocd argocd-applicationset-controller
 else
-  log "Phase 9: ArgoCD already installed"
+  log "Phase 10: ArgoCD already installed"
 fi
 
 wait_deploy argocd argocd-server
 
-# ── Phase 10: Connect GitHub repo to ArgoCD ───────────────────────
-log "Phase 10: Registering GitHub repo in ArgoCD..."
+# ── Phase 11: Connect GitHub repo to ArgoCD ───────────────────────
+log "Phase 11: Registering GitHub repo in ArgoCD..."
 kubectl apply -f - << EOF
 apiVersion: v1
 kind: Secret
@@ -203,12 +211,12 @@ stringData:
   password: $GITHUB_TOKEN
 EOF
 
-# ── Phase 11: Deploy ArgoCD apps ─────────────────────────────────
-log "Phase 11: Deploying ArgoCD applications..."
-kubectl apply -f "$REPO_DIR/03-argocd-apps/"
+# ── Phase 12: Deploy ArgoCD apps ─────────────────────────────────
+log "Phase 12: Deploying ArgoCD applications..."
+kubectl apply -f "$CLUSTER_DIR/03-argocd-apps/"
 
-# ── Phase 12: Backup sealed secrets private key ───────────────────
-log "Phase 12: Backing up Sealed Secrets private key..."
+# ── Phase 13: Backup sealed secrets private key ───────────────────
+log "Phase 13: Backing up Sealed Secrets private key..."
 kubectl get secret -n kube-system \
   -l sealedsecrets.bitnami.com/sealed-secrets-key \
   -o yaml > /root/sealed-secrets-master-key-backup.yaml
@@ -222,9 +230,10 @@ echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║                  Setup Complete                      ║"
 echo "╠══════════════════════════════════════════════════════╣"
-printf  "║  ArgoCD   : %-40s║\n" "http://argocd.lab-hc.cloud"
-printf  "║  Grafana  : %-40s║\n" "http://grafana.lab-hc.cloud"
-printf  "║  ArgoCD password : %-33s║\n" "$ARGOCD_PASS"
+printf  "║  Cluster ID  : %-37s║\n" "$CLUSTER_ID"
+printf  "║  ArgoCD      : %-37s║\n" "http://argocd.lab-hc.cloud"
+printf  "║  Grafana     : %-37s║\n" "http://grafana.lab-hc.cloud"
+printf  "║  ArgoCD pass : %-37s║\n" "$ARGOCD_PASS"
 echo "╠══════════════════════════════════════════════════════╣"
 echo "║  Keep these files safe (NOT in git):                 ║"
 echo "║    /root/secrets-backup/                             ║"
