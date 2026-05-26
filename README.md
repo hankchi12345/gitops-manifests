@@ -1,177 +1,134 @@
 # k3s GitOps Monitoring Stack
 
-基於 GitOps 架構的 k3s 監控平台，使用 ArgoCD 自動同步，包含 Prometheus、Grafana、Cloudflare Tunnel。
+基於 GitOps 架構的 k3s 監控平台，使用 ArgoCD 自動同步。
+
+## 快速部署
+
+```bash
+git clone https://github.com/hankchi12345/gitops-manifests.git /opt/gitops-manifests
+bash /opt/gitops-manifests/startformzero.sh
+```
+
+Script 會互動式詢問三樣東西，其餘全自動：
+
+| 輸入 | 說明 |
+|------|------|
+| Grafana 帳號 / 密碼 | Grafana UI 登入用 |
+| Cloudflare tunnel token | 從 Cloudflare Zero Trust 後台取得 |
+| GitHub username / token | 用於 ArgoCD 連接此 repo（token 需有 repo 讀取權限） |
+
+完成後輸出 ArgoCD 初始密碼與各服務網址。
 
 ## 架構
 
 ```
 GitHub (source of truth)
     ↓ ArgoCD 自動同步
-k3s cluster
+k3s cluster (single node)
     ├── Cloudflare Tunnel → Traefik → 對外服務
     ├── Prometheus + node-exporter + kube-state-metrics
     └── Grafana (dashboard)
 ```
 
+## 服務網址
+
+| 服務 | 網址 |
+|------|------|
+| Grafana | https://grafana.lab-hc.cloud |
+| ArgoCD  | https://argocd.lab-hc.cloud  |
+
+## Script 做了什麼
+
+| Phase | 內容 |
+|-------|------|
+| 0 | 修正 DNS（`/etc/k3s-resolv.conf`，避免 Go 應用解析到 localhost） |
+| 1 | 安裝 k3s server，等待 Node Ready |
+| 2 | 安裝 Helm，加入 prometheus / grafana / sealed-secrets repo |
+| 3 | 安裝 Sealed Secrets controller + kubeseal CLI |
+| 4 | Clone repo |
+| 5 | 將輸入的帳密 / token 寫入 `/root/secrets-backup/`（明文，不進 git） |
+| 6 | kubeseal 加密，寫入 repo 的 sealed-secrets.yaml |
+| 7 | git commit + push（ArgoCD 從 git 拉，所以新 sealed secrets 要先進 repo） |
+| 8 | apply namespace / PVC / quota / Cloudflare / Grafana kustomize |
+| 9 | 安裝 ArgoCD，修正 applicationset-controller 啟動 race condition |
+| 10 | 將 GitHub repo 註冊進 ArgoCD |
+| 11 | apply ArgoCD Application（之後 ArgoCD 全自動） |
+| 12 | 備份 Sealed Secrets 私鑰到 `/root/sealed-secrets-master-key-backup.yaml` |
+
 ## 目錄結構
 
 ```
 gitops-manifests/
+├── startformzero.sh                # 一鍵部署腳本
 ├── 00-base/                        # 基礎設施
-│   ├── namespace.yaml              # 所有 namespace 定義
-│   ├── pvc.yaml                    # Grafana 持久化儲存
-│   ├── quota.yaml                  # 各 namespace pod 數量上限
-│   └── cloudflare/                 # Cloudflare Tunnel
+│   ├── namespace.yaml
+│   ├── pvc.yaml
+│   ├── quota.yaml
+│   └── cloudflare/
 │       ├── cloudflare-configmap.yaml
 │       ├── cloudflare-deployment.yaml
 │       └── cloudflare-sealed-secrets.yaml
-├── 01-configs/grafana/             # Grafana 設定
-│   ├── datasources.yaml            # Prometheus datasource
-│   ├── dashboards-provision.yaml   # Dashboard 載入路徑
-│   ├── sealed-secrets.yaml         # 加密的帳密
+├── 01-configs/grafana/
+│   ├── datasources.yaml
+│   ├── dashboards-provision.yaml
+│   ├── sealed-secrets.yaml
 │   ├── kustomization.yaml
-│   └── dash-json/                  # Dashboard JSON
-│       ├── node-exporter.json      # Node 監控
-│       └── kube-cluster-monitoring.json  # Pod 監控
-├── 02-helm-values/                 # Helm chart 設定
+│   └── dash-json/
+│       ├── node-exporter.json
+│       └── kube-cluster-monitoring.json
+├── 02-helm-values/
 │   ├── prometheus/values.yaml
 │   └── grafana/values.yaml
-└── 03-argocd-apps/                 # ArgoCD 應用定義
+└── 03-argocd-apps/
     ├── argocd-default-project.yaml
     ├── argocd-ingress.yaml
     ├── prometheus.yaml
     └── grafana.yaml
 ```
 
-## 部署到新 Server
+## 搬到新 Server
 
-### Day 0：基礎設施
+Sealed Secrets 私鑰是 cluster-specific，新 server 有兩種做法：
 
+**A. 還原舊私鑰（sealed secrets 不用重新加密）**
 ```bash
-# 1. 修正 DNS（避免 Go 應用程式解析到 localhost）
-cat > /etc/k3s-resolv.conf << EOF
-nameserver 1.1.1.1
-nameserver 8.8.4.4
-EOF
-
-# 2. 安裝 k3s（帶入正確的 resolv.conf）
-curl -sfL https://get.k3s.io | sh -s - server \
-  --write-kubeconfig-mode 644 \
-  --node-name k3s-master \
-  --resolv-conf /etc/k3s-resolv.conf
-
-# 3. 安裝 Sealed Secrets controller
-helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
-helm install sealed-secrets sealed-secrets/sealed-secrets -n kube-system
-
-# 4. 安裝 kubeseal CLI
-KUBESEAL_VERSION=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest | grep tag_name | cut -d '"' -f 4 | cut -c 2-)
-curl -OL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VERSION}/kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz"
-tar -xzf kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz kubeseal
-mv kubeseal /usr/local/bin/
+kubectl apply -f /root/sealed-secrets-master-key-backup.yaml
+kubectl rollout restart deployment -n kube-system sealed-secrets
+# 然後再跑 startformzero.sh
 ```
 
-### Day 1：平台部署
+**B. 全新 cluster（重新加密）**
+```bash
+# 直接跑 script，它會用新 cluster 的金鑰重新 seal 並 push
+bash /opt/gitops-manifests/startformzero.sh
+```
+
+## 改密碼
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/hankchi12345/gitops-manifests.git /opt/gitops-manifests
-cd /opt/gitops-manifests
+# 1. 修改明文檔案
+vi /root/secrets-backup/grafana-secrets.yaml
 
-# 2. 建立 secrets（明文只存本機，不進 Git）
-mkdir -p /root/secrets-backup
-cat > /root/secrets-backup/grafana-secrets.yaml << EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: grafana-admin-creds
-  namespace: monitoring
-type: Opaque
-data:
-  admin-user: $(echo -n "你的帳號" | base64)
-  admin-password: $(echo -n "你的密碼" | base64)
-EOF
-
-cat > /root/secrets-backup/cloudflare-secrets.yaml << EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: cloudflare-tunnel-token
-  namespace: infra-system
-type: Opaque
-data:
-  tunnel-token: 你的_tunnel_token_base64
-EOF
-
-# 3. 加密 secrets
+# 2. 重新 seal
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
   < /root/secrets-backup/grafana-secrets.yaml \
-  > 01-configs/grafana/sealed-secrets.yaml
+  > /opt/gitops-manifests/01-configs/grafana/sealed-secrets.yaml
 
-kubeseal --format=yaml \
-  --controller-name=sealed-secrets \
-  --controller-namespace=kube-system \
-  < /root/secrets-backup/cloudflare-secrets.yaml \
-  > 00-base/cloudflare/cloudflare-sealed-secrets.yaml
+# 3. push → ArgoCD 自動 apply
 
-# 4. 套用基礎設施
-kubectl apply -f 00-base/namespace.yaml
-kubectl apply -f 00-base/
-kubectl apply --server-side -k 01-configs/grafana/
-
-# 5. 安裝 ArgoCD
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-# 等待 CRD 就緒後重啟 controller
-kubectl rollout restart deployment -n argocd argocd-applicationset-controller
-
-# 6. 安裝 Helm 並加入 repo
-curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
+# 4. 刪 PVC 讓 Grafana 重新初始化（密碼存在 DB 裡）
+kubectl delete pvc grafana-pvc -n monitoring
 ```
 
-### Day 2：連接 GitOps
+## 安全備份（重要）
 
 ```bash
-# 1. 安裝 argocd CLI
-curl -sSL -o /usr/local/bin/argocd \
-  https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-chmod +x /usr/local/bin/argocd
-
-# 2. 登入 ArgoCD
-kubectl port-forward svc/argocd-server -n argocd 8080:443 &
-argocd login localhost:8080 --insecure --username admin
-
-# 3. 連接 GitHub repo
-argocd repo add https://github.com/hankchi12345/gitops-manifests.git \
-  --username 你的帳號 --password 你的_github_token
-
-# 4. 套用 ArgoCD Application（之後 ArgoCD 全自動）
-kubectl apply -f 03-argocd-apps/
-```
-
-## 對外網址
-
-| 服務 | 網址 |
-|---|---|
-| Grafana | https://grafana.你的網域 |
-| ArgoCD | https://argocd.你的網域 |
-
-## 改密碼注意事項
-
-1. 修改 `/root/secrets-backup/grafana-secrets.yaml`（使用 `echo -n` 避免多換行）
-2. 重新 kubeseal 並 apply
-3. 砍 PVC 讓 Grafana 用新密碼重新初始化
-
-## 備份 Sealed Secrets 私鑰
-
-```bash
-# cluster 重建時需要這個才能解密
+# Sealed Secrets 私鑰 — cluster 重建時需要
 kubectl get secret -n kube-system \
   -l sealedsecrets.bitnami.com/sealed-secrets-key \
   -o yaml > /root/sealed-secrets-master-key-backup.yaml
 ```
+
+`/root/secrets-backup/` 和 `/root/sealed-secrets-master-key-backup.yaml` 請妥善保存，不進 git。
