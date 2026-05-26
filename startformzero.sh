@@ -183,7 +183,7 @@ kubectl apply --server-side -k "$CLUSTER_DIR/01-configs/grafana/"
 if ! kubectl get namespace argocd &>/dev/null; then
   log "Phase 10: Installing ArgoCD..."
   kubectl create namespace argocd
-  kubectl apply -n argocd \
+  kubectl apply --server-side -n argocd \
     -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
   log "Phase 10: Waiting for ArgoCD CRDs..."
