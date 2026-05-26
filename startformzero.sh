@@ -117,9 +117,9 @@ sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/grafana.yaml"
 log "Phase 6: Writing plaintext secrets to /root/secrets-backup/"
 mkdir -p /root/secrets-backup
 
-GRAFANA_USER_B64=$(printf '%s' "$GRAFANA_USER" | base64)
-GRAFANA_PASS_B64=$(printf '%s' "$GRAFANA_PASS" | base64)
-CF_TOKEN_B64=$(printf '%s' "$CF_TOKEN" | base64)
+GRAFANA_USER_B64=$(printf '%s' "$GRAFANA_USER" | base64 -w 0)
+GRAFANA_PASS_B64=$(printf '%s' "$GRAFANA_PASS" | base64 -w 0)
+CF_TOKEN_B64=$(printf '%s' "$CF_TOKEN" | base64 -w 0)
 
 cat > /root/secrets-backup/grafana-secrets.yaml << EOF
 apiVersion: v1
