@@ -210,10 +210,10 @@ metadata:
     argocd.argoproj.io/secret-type: repository
 type: Opaque
 stringData:
-  type: git
-  url: $REPO_URL
-  username: $GITHUB_USER
-  password: $GITHUB_TOKEN
+  type: "git"
+  url: "${REPO_URL}"
+  username: "${GITHUB_USER}"
+  password: "${GITHUB_TOKEN}"
 EOF
 
 # ── Phase 12: Deploy ArgoCD apps ─────────────────────────────────
