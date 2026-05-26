@@ -26,7 +26,7 @@ echo "║     GitOps Monitoring Stack - Bootstrap  ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 read -rp  "Cluster name (e.g. m1, prod, lab) : " CLUSTER_NAME
-RANDOM_SUFFIX=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 5)
+RANDOM_SUFFIX=$(openssl rand -hex 4 | head -c 5)
 CLUSTER_ID="${CLUSTER_NAME}-${RANDOM_SUFFIX}"
 echo "      → Cluster ID: ${CLUSTER_ID}"
 echo ""
