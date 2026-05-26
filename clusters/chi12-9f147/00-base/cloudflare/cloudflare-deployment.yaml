@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflare
+  namespace: infra-system
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/component: tunnel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflare
+  template:
+    metadata:
+      labels:
+        app: cloudflare
+        app.kubernetes.io/name: cloudflared
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+
+      containers:
+      - name: cloudflare
+        image: cloudflare/cloudflared:2025.4.0
+        args:
+        - tunnel
+        - "--config"
+        - /etc/cloudflare/config/config.yaml
+        - "--metrics"
+        - "0.0.0.0:2000"
+        - run
+
+        env:
+        - name: TUNNEL_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: cloudflare-tunnel-token
+              key: tunnel-token
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 2000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 2000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+        volumeMounts:
+        - name: cloudflare-config
+          mountPath: /etc/cloudflare/config
+          readOnly: true
+
+      volumes:
+      - name: cloudflare-config
+        configMap:
+          name: cloudflare-config
