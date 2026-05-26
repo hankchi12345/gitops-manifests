@@ -117,6 +117,10 @@ sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/grafana.yaml"
 log "Phase 6: Writing plaintext secrets to /root/secrets-backup/"
 mkdir -p /root/secrets-backup
 
+GRAFANA_USER_B64=$(printf '%s' "$GRAFANA_USER" | base64)
+GRAFANA_PASS_B64=$(printf '%s' "$GRAFANA_PASS" | base64)
+CF_TOKEN_B64=$(printf '%s' "$CF_TOKEN" | base64)
+
 cat > /root/secrets-backup/grafana-secrets.yaml << EOF
 apiVersion: v1
 kind: Secret
@@ -125,8 +129,8 @@ metadata:
   namespace: monitoring
 type: Opaque
 data:
-  admin-user: $(echo -n "$GRAFANA_USER" | base64)
-  admin-password: $(echo -n "$GRAFANA_PASS" | base64)
+  admin-user: ${GRAFANA_USER_B64}
+  admin-password: ${GRAFANA_PASS_B64}
 EOF
 
 cat > /root/secrets-backup/cloudflare-secrets.yaml << EOF
@@ -137,7 +141,7 @@ metadata:
   namespace: infra-system
 type: Opaque
 data:
-  tunnel-token: $(echo -n "$CF_TOKEN" | base64)
+  tunnel-token: ${CF_TOKEN_B64}
 EOF
 
 chmod 600 /root/secrets-backup/*.yaml
