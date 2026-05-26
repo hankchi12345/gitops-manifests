@@ -106,6 +106,7 @@ fi
 
 # ── Phase 5: Create cluster directory from template ───────────────
 log "Phase 5: Creating cluster directory clusters/$CLUSTER_ID ..."
+mkdir -p "$REPO_DIR/clusters"
 cp -r "$REPO_DIR/template" "$CLUSTER_DIR"
 
 # Substitute CLUSTER_ID placeholder in ArgoCD app files
