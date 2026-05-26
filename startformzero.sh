@@ -198,6 +198,12 @@ fi
 
 wait_deploy argocd argocd-server
 
+# Disable ArgoCD's built-in HTTP→HTTPS redirect (SSL is terminated at Cloudflare)
+kubectl patch configmap argocd-cmd-params-cm -n argocd \
+  --type=merge -p '{"data":{"server.insecure":"true"}}'
+kubectl rollout restart deployment argocd-server -n argocd
+wait_deploy argocd argocd-server
+
 # ── Phase 11: Connect GitHub repo to ArgoCD ───────────────────────
 log "Phase 11: Registering GitHub repo in ArgoCD..."
 kubectl apply -f - << EOF
