@@ -4,6 +4,8 @@
 
 ## 快速部署
 
+### Master（控制平面）
+
 ```bash
 git clone https://github.com/hankchi12345/gitops-manifests.git /opt/gitops-manifests
 bash /opt/gitops-manifests/startformzero.sh
@@ -25,6 +27,26 @@ Script 會互動式詢問以下資訊，其餘全自動：
 | GitHub username / token | 用於 ArgoCD 連接此 repo（token 需有 `repo` 讀取權限） |
 
 完成後輸出 Cluster ID、ArgoCD 初始密碼與各服務網址。
+
+### Worker（加入現有 cluster）
+
+在 **worker 機器**上執行：
+
+```bash
+git clone https://github.com/hankchi12345/gitops-manifests.git /opt/gitops-manifests
+bash /opt/gitops-manifests/startworker.sh
+```
+
+Script 會互動式詢問以下資訊：
+
+| 輸入 | 說明 |
+|------|------|
+| Master IP | k3s master 的 IP，例如 `192.168.1.100` |
+| Join token | 從 master 取得：`cat /var/lib/rancher/k3s/server/node-token` |
+
+Node name 自動依本機 IP 與時間產生，格式：`k3s-worker-{IP最後一組}-{年2碼}-{月}`，例如 `k3s-worker-122-26-5`。
+
+完成後在 master 執行 `kubectl get nodes` 確認 worker 已加入。
 
 ## 架構
 
