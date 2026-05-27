@@ -32,7 +32,10 @@ read -rp  "k3s Master IP (e.g. 192.168.1.100) : " MASTER_IP
 read -rsp "k3s Join token                      : " K3S_TOKEN; echo
 echo ""
 
-# ── Phase 0: DNS fix ──────────────────────────────────────────────
+# ── Phase 0: Hostname + DNS ───────────────────────────────────────
+log "Phase 0: Setting hostname to ${NODE_NAME}"
+hostnamectl set-hostname "${NODE_NAME}"
+
 log "Phase 0: DNS — writing /etc/k3s-resolv.conf"
 cat > /etc/k3s-resolv.conf << EOF
 nameserver 1.1.1.1

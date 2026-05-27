@@ -19,11 +19,22 @@ wait_deploy() {
 # ── Root check ────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && die "Must run as root"
 
+# ── Auto-generate node name: k3s-master-{last_octet}-{YY}-{M} ────
+LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+[[ -z "$LOCAL_IP" ]] && die "Cannot detect local IP"
+LAST_OCTET=$(echo "$LOCAL_IP" | awk -F. '{print $4}')
+YEAR_SHORT=$(date +%y)
+MONTH=$(date +%-m)
+NODE_NAME="k3s-master-${LAST_OCTET}-${YEAR_SHORT}-${MONTH}"
+
 # ── Interactive prompts ───────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║     GitOps Monitoring Stack - Bootstrap  ║"
 echo "╚══════════════════════════════════════════╝"
+echo ""
+echo "  Detected IP  : ${LOCAL_IP}"
+echo "  Node name    : ${NODE_NAME}"
 echo ""
 read -rp  "Cluster name (e.g. m1, prod, lab) : " CLUSTER_NAME
 RANDOM_SUFFIX=$(openssl rand -hex 4 | head -c 5)
@@ -39,7 +50,10 @@ echo ""
 
 CLUSTER_DIR="$REPO_DIR/clusters/$CLUSTER_ID"
 
-# ── Phase 0: DNS fix ──────────────────────────────────────────────
+# ── Phase 0: Hostname + DNS ───────────────────────────────────────
+log "Phase 0: Setting hostname to ${NODE_NAME}"
+hostnamectl set-hostname "${NODE_NAME}"
+
 log "Phase 0: DNS — writing /etc/k3s-resolv.conf"
 cat > /etc/k3s-resolv.conf << EOF
 nameserver 1.1.1.1
@@ -51,7 +65,7 @@ if ! command -v kubectl &>/dev/null; then
   log "Phase 1: Installing k3s..."
   curl -sfL https://get.k3s.io | sh -s - server \
     --write-kubeconfig-mode 644 \
-    --node-name "$CLUSTER_ID" \
+    --node-name "$NODE_NAME" \
     --resolv-conf /etc/k3s-resolv.conf
   log "Waiting for node to be Ready..."
   until kubectl get node 2>/dev/null | grep -q " Ready"; do sleep 3; done
