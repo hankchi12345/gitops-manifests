@@ -1,6 +1,29 @@
-# k3s GitOps Monitoring Stack
+# k3s GitOps Stack
 
-基於 GitOps 架構的 k3s 監控平台，使用 ArgoCD 自動同步。
+基於 GitOps 架構的 k3s 平台，使用 ArgoCD 自動同步，GitHub Actions 自動追蹤上游版本。
+
+## 架構
+
+```
+GitHub (source of truth)
+    ↓ ArgoCD 每 3 分鐘 poll
+k3s cluster
+    ├── Cloudflare Tunnel → Traefik → 對外服務
+    ├── Prometheus + node-exporter + kube-state-metrics
+    ├── Grafana (dashboard)
+    └── MeTube (YouTube 下載器)
+
+GitHub Actions (每天 02:00 UTC)
+    └── 查 MeTube 上游新版 → 更新 image tag → git push → ArgoCD 部署
+```
+
+## 服務網址
+
+| 服務 | 網址 |
+|------|------|
+| Grafana | https://grafana.lab-hc.cloud |
+| ArgoCD  | https://argocd.lab-hc.cloud  |
+| MeTube  | https://metube.lab-hc.cloud  |
 
 ## 快速部署
 
@@ -28,6 +51,12 @@ Script 會互動式詢問以下資訊，其餘全自動：
 
 完成後輸出 Cluster ID、ArgoCD 初始密碼與各服務網址。
 
+**MeTube 需要額外 apply 一次 ArgoCD Application（script 尚未自動化此步驟）：**
+
+```bash
+kubectl apply -f /opt/gitops-manifests/clusters/<cluster-id>/03-argocd-apps/metube.yaml
+```
+
 ### Worker（加入現有 cluster）
 
 在 **worker 機器**上執行：
@@ -44,27 +73,34 @@ Script 會互動式詢問以下資訊：
 | Master IP | k3s master 的 IP，例如 `192.168.1.100` |
 | Join token | 從 master 取得：`cat /var/lib/rancher/k3s/server/node-token` |
 
-Node name 自動依本機 IP 與時間產生，格式：`k3s-worker-{IP最後一組}-{年2碼}-{月}`，例如 `k3s-worker-122-26-5`。
+Node name 自動依本機 IP 與時間產生，格式：`k3s-worker-{IP最後一組}-{年2碼}-{月}`。
 
 完成後在 master 執行 `kubectl get nodes` 確認 worker 已加入。
 
-## 架構
+## 目錄結構
 
 ```
-GitHub (source of truth)
-    ↓ ArgoCD 自動同步
-k3s cluster (single node)
-    ├── Cloudflare Tunnel → Traefik → 對外服務
-    ├── Prometheus + node-exporter + kube-state-metrics
-    └── Grafana (dashboard)
+gitops-manifests/
+├── startformzero.sh          # 一鍵部署腳本（master）
+├── startworker.sh            # 加入 worker 腳本
+├── .github/workflows/
+│   └── update-metube.yml     # 每日自動更新 MeTube image tag
+├── template/                 # 所有 yaml 模板（不直接部署）
+│   ├── 00-base/              # namespace / pvc / quota / cloudflare
+│   ├── 01-configs/grafana/   # datasource / dashboard / sealed-secrets
+│   ├── 02-helm-values/       # prometheus / grafana helm values
+│   ├── 03-argocd-apps/       # ArgoCD Application（含 CLUSTER_ID 佔位符）
+│   └── 04-apps/metube/       # MeTube k8s 資源模板
+└── clusters/                 # script 建立，每個 cluster 完全獨立
+    └── <cluster-id>/         # 各 cluster 自己的目錄，互不干擾
+        ├── 00-base/
+        ├── 01-configs/
+        ├── 02-helm-values/
+        ├── 03-argocd-apps/   # ArgoCD app 路徑已替換為此 cluster 的 path
+        └── 04-apps/metube/   # 實際部署的 MeTube 資源（image tag 由 CI 更新）
 ```
 
-## 服務網址
-
-| 服務 | 網址 |
-|------|------|
-| Grafana | https://grafana.lab-hc.cloud |
-| ArgoCD  | https://argocd.lab-hc.cloud  |
+每個 cluster 的 ArgoCD 只監看自己的 `clusters/<id>/` 目錄，新增其他 cluster 不影響現有 cluster。
 
 ## Script 做了什麼
 
@@ -85,36 +121,21 @@ k3s cluster (single node)
 | 12 | apply ArgoCD Application（之後 ArgoCD 全自動） |
 | 13 | 備份 Sealed Secrets 私鑰到 `/root/sealed-secrets-master-key-backup.yaml` |
 
-## 目錄結構
+## CI/CD 流程（MeTube 自動更新）
 
 ```
-gitops-manifests/
-├── startformzero.sh          # 一鍵部署腳本
-├── template/                 # 所有 yaml 模板（不直接部署）
-│   ├── 00-base/
-│   │   ├── namespace.yaml
-│   │   ├── pvc.yaml
-│   │   ├── quota.yaml
-│   │   └── cloudflare/
-│   ├── 01-configs/grafana/
-│   │   ├── datasources.yaml
-│   │   ├── dashboards-provision.yaml
-│   │   ├── sealed-secrets.yaml
-│   │   ├── kustomization.yaml
-│   │   └── dash-json/
-│   ├── 02-helm-values/
-│   │   ├── prometheus/values.yaml
-│   │   └── grafana/values.yaml
-│   └── 03-argocd-apps/       # prometheus/grafana.yaml 含 CLUSTER_ID 佔位符
-└── clusters/                 # script 建立，每個 cluster 完全獨立
-    └── m1-a3k9x/             # 各 cluster 自己的目錄，互不干擾
-        ├── 00-base/
-        ├── 01-configs/
-        ├── 02-helm-values/
-        └── 03-argocd-apps/   # ArgoCD app 路徑已替換為此 cluster 的 path
+每天 02:00 UTC
+    ↓ GitHub Actions: update-metube.yml
+    ├── curl GitHub API → 取得最新 release tag
+    ├── 比對 clusters/*/04-apps/metube/deployment.yaml 中的現有 tag
+    ├── 版本相同 → 結束，不產生任何 commit
+    └── 版本不同 → sed 更新所有 cluster 的 image tag
+                    → git commit + push
+                    → ArgoCD 偵測 git 變化（~3 分鐘）
+                    → 滾動更新 Pod
 ```
 
-每個 cluster 的 ArgoCD 只監看自己的 `clusters/<id>/` 目錄，新增其他 cluster 不影響現有 cluster。
+手動觸發：GitHub repo → Actions → `Update MeTube Image` → `Run workflow`
 
 ## 搬到新 Server
 
@@ -142,7 +163,7 @@ bash /opt/gitops-manifests/startformzero.sh
 # 1. 修改明文檔案
 vi /root/secrets-backup/grafana-secrets.yaml
 
-# 2. 重新 seal（將 CLUSTER_ID 替換為實際值，例如 m1-a3k9x）
+# 2. 重新 seal（將 CLUSTER_ID 替換為實際值）
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
