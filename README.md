@@ -137,6 +137,122 @@ gitops-manifests/
 
 手動觸發：GitHub repo → Actions → `Update MeTube Image` → `Run workflow`
 
+## 更新 MeTube YouTube Cookies
+
+MeTube 使用 YouTube cookies 讓 yt-dlp 以認證身份下載，繞過機器人偵測。
+Cookie session 約每數個月至一年過期，過期後下載可能失敗，需手動更新。
+
+### 判斷是否需要更新
+
+MeTube 下載時出現以下錯誤即代表 cookies 已過期：
+```
+Sign in to confirm you're not a bot
+ERROR: [youtube] ...: This content isn't available
+```
+
+### 手動更新流程
+
+**步驟一：在你的電腦匯出新 cookies**
+
+1. Chrome 安裝擴充套件 [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+2. 開啟 `youtube.com` 並確認已登入帳號
+3. 點擴充套件 → 選 `Current Site` → `Export`，存成 `cookies.txt`
+
+**步驟二：更新 master 上的備份檔**
+
+```bash
+# 貼上新的 cookies 內容（覆蓋舊檔）
+vi /root/secrets-backup/metube-cookies.txt
+```
+
+**步驟三：重新 seal 並 push**
+
+```bash
+# 重新產生 Secret YAML（從檔案內容）
+kubectl create secret generic metube-cookies \
+  --namespace app-dev \
+  --from-file=cookies.txt=/root/secrets-backup/metube-cookies.txt \
+  --dry-run=client -o yaml \
+  > /root/secrets-backup/metube-cookies-secret.yaml
+
+# 用 cluster 的公鑰加密（產生 SealedSecret，可安全進 git）
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubeseal --format=yaml \
+  --controller-name=sealed-secrets \
+  --controller-namespace=kube-system \
+  < /root/secrets-backup/metube-cookies-secret.yaml \
+  > /opt/gitops-manifests/clusters/Master-5cf92/04-apps/metube/cookies-sealed-secret.yaml
+
+# push → ArgoCD 自動更新 Pod 內的 cookies 檔
+cd /opt/gitops-manifests
+git add clusters/Master-5cf92/04-apps/metube/cookies-sealed-secret.yaml
+git commit -m "chore: refresh metube youtube cookies"
+git push
+```
+
+push 完約 3 分鐘後 ArgoCD 自動 apply，Pod 滾動重啟後帶入新 cookies。
+
+### 可以自動化嗎？
+
+| 部分 | 能否自動化 | 說明 |
+|------|-----------|------|
+| 匯出 cookies | ❌ | YouTube 需要真實瀏覽器登入，server 上無法自動執行 |
+| kubeseal + git push | ✅ | 純 script，可以自動化 |
+
+**半自動化方案（推薦）**
+
+把 cookies 內容存為 GitHub Actions Secret，建一個 workflow，你只需要在 GitHub UI 更新 Secret，workflow 自動處理 seal + commit + push：
+
+1. GitHub repo → Settings → Secrets and variables → Actions
+2. 建立 Secret 名稱：`METUBE_COOKIES_B64`，值為 cookies.txt 的 base64：
+   ```bash
+   base64 -w0 /root/secrets-backup/metube-cookies.txt
+   # 複製輸出，貼到 GitHub Secret 的值欄位
+   ```
+3. 建立 `.github/workflows/refresh-metube-cookies.yml`（手動觸發）：
+   ```yaml
+   name: Refresh MeTube Cookies
+   on:
+     workflow_dispatch:
+   jobs:
+     refresh:
+       runs-on: ubuntu-latest
+       permissions:
+         contents: write
+       steps:
+         - uses: actions/checkout@v4
+         - name: Decode cookies and create secret YAML
+           run: |
+             echo "${{ secrets.METUBE_COOKIES_B64 }}" | base64 -d > /tmp/cookies.txt
+             kubectl create secret generic metube-cookies \
+               --namespace app-dev \
+               --from-file=cookies.txt=/tmp/cookies.txt \
+               --dry-run=client -o yaml > /tmp/metube-cookies-secret.yaml
+         - name: Seal secret
+           run: |
+             curl -sL https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.27.3/kubeseal-0.27.3-linux-amd64.tar.gz | tar xz kubeseal
+             # 需要 cluster 的 public key（存為另一個 Secret: SEALED_SECRETS_CERT）
+             echo "${{ secrets.SEALED_SECRETS_CERT }}" > /tmp/ss-cert.pem
+             ./kubeseal --format=yaml --cert /tmp/ss-cert.pem \
+               < /tmp/metube-cookies-secret.yaml \
+               > clusters/Master-5cf92/04-apps/metube/cookies-sealed-secret.yaml
+         - name: Commit and push
+           run: |
+             git config user.name "github-actions[bot]"
+             git config user.email "github-actions[bot]@users.noreply.github.com"
+             git add clusters/Master-5cf92/04-apps/metube/cookies-sealed-secret.yaml
+             git commit -m "chore: refresh metube youtube cookies"
+             git push
+   ```
+4. 備份 cluster 的 Sealed Secrets 公鑰（存為 `SEALED_SECRETS_CERT` Secret）：
+   ```bash
+   KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubeseal --fetch-cert \
+     --controller-name=sealed-secrets \
+     --controller-namespace=kube-system
+   # 複製輸出的 PEM，貼到 GitHub Secret
+   ```
+
+之後只需更新 `METUBE_COOKIES_B64` 並手動觸發 workflow，全程不需登入 master。
+
 ## 搬到新 Server
 
 Sealed Secrets 私鑰是 cluster-specific。新 server 有兩種情境：
