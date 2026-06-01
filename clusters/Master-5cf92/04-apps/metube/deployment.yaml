@@ -22,9 +22,15 @@ spec:
           image: ghcr.io/alexta69/metube:2026.05.30
           ports:
             - containerPort: 8081
+          env:
+            - name: YTDL_OPTIONS
+              value: '{"cookiefile":"/cookies/cookies.txt"}'
           volumeMounts:
             - name: downloads
               mountPath: /downloads
+            - name: cookies
+              mountPath: /cookies
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -46,3 +52,6 @@ spec:
         - name: downloads
           persistentVolumeClaim:
             claimName: metube-downloads
+        - name: cookies
+          secret:
+            secretName: metube-cookies
