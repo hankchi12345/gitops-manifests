@@ -1,3 +1,8 @@
 # 原始 secret 檔案，只存本機，不進 Git
 00-base/cloudflare/cloudflare-secrets.yaml
 01-configs/grafana/secrets.yaml
+
+# 應用程式部署（各 app 有自己的 repo）
+clusters/*/04-apps/
+template/04-apps/
+.github/workflows/update-*.yml
