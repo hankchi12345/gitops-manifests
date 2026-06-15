@@ -4,7 +4,7 @@
 提供監控、Secret 管理、對外暴露等基礎設施，應用程式部署於各自的 repo。
 
 ## 架構
-
+[![K3s GitOps 平台架構圖](template/architecture/k3s-gitops-platform-architecture.png)](template/architecture/k3s-gitops-platform-architecture.png)
 ```
 GitHub (source of truth)
     ↓ ArgoCD 每 3 分鐘 poll

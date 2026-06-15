@@ -11,7 +11,7 @@ spec:
       targetRevision: "27.x.x"
       helm:
         valueFiles:
-          - $values/clusters/CLUSTER_ID/02-helm-values/prometheus/values.yaml
+          - $values/02-helm-values/prometheus/values.yaml
     - repoURL: https://github.com/hankchi12345/gitops-manifests.git
       targetRevision: HEAD
       ref: values
