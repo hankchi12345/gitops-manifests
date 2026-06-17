@@ -27,9 +27,17 @@ k3s cluster
 
 ## Longhorn 儲存層
 
-透過 `longhorn-prerequisite` ArgoCD Application 自動部署 iscsi-installer DaemonSet，依各節點 OS 自動安裝 open-iscsi（Rocky / AlmaLinux / Debian 均支援），無需手動 SSH。
+Longhorn v1.12.0 不再內建 iscsi-installation DaemonSet，改由自訂 `longhorn-iscsi` Application 處理。
 
-部署順序由 sync-wave 控制：`longhorn-prerequisite`（wave -1）→ `longhorn`（wave 0）。
+部署順序由 sync-wave 控制：
+
+| Application | Wave | 說明 |
+|---|---|---|
+| `longhorn-iscsi` | -2 | 自訂 iscsi-installer DaemonSet（Rocky / AlmaLinux / Debian 均支援） |
+| `longhorn-prerequisite` | -1 | Longhorn 官方 prerequisite（SELinux workaround、CIFS） |
+| `longhorn` | 0 | Longhorn Helm chart（主體） |
+
+首次安裝時 Longhorn Helm pre-upgrade hook 需要 CRD 與 RBAC 存在才能執行，因此改用 `kubectl apply` 官方 manifest（`deploy/longhorn.yaml`）初始化，之後由 ArgoCD 持續管理。
 
 ---
 
