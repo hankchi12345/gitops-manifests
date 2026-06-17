@@ -6,6 +6,7 @@ resources:
   - argocd-ingress.yaml
   - longhorn-prerequisite.yaml
   - longhorn.yaml
+  - longhorn-ingress.yaml
   - grafana.yaml
   - metube.yaml
   - prometheus.yaml
