@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: longhorn-iscsi-installation
+  namespace: longhorn-system
+  annotations:
+    command: >-
+      OS=$(grep -E "^ID_LIKE=" /etc/os-release | cut -d '=' -f 2);
+      if [[ -z "${OS}" ]]; then OS=$(grep -E "^ID=" /etc/os-release | cut -d '=' -f 2); fi;
+      if [[ "${OS}" == *"debian"* ]]; then
+        apt-get update -q -y && apt-get install -q -y open-iscsi;
+      elif [[ "${OS}" == *"suse"* ]]; then
+        zypper --gpg-auto-import-keys -q refresh && zypper --gpg-auto-import-keys -q install -y open-iscsi;
+      else
+        yum makecache -q -y && yum --setopt=tsflags=noscripts install -q -y iscsi-initiator-utils;
+      fi &&
+      systemctl enable iscsid && systemctl start iscsid || true
+  labels:
+    app: longhorn-iscsi-installation
+spec:
+  selector:
+    matchLabels:
+      app: longhorn-iscsi-installation
+  template:
+    metadata:
+      labels:
+        app: longhorn-iscsi-installation
+    spec:
+      hostNetwork: true
+      hostPID: true
+      initContainers:
+        - name: iscsi-installation
+          image: alpine:3.12
+          command:
+            - nsenter
+            - --mount=/proc/1/ns/mnt
+            - --
+            - bash
+            - -c
+            - |
+              OS=$(grep -E "^ID_LIKE=" /etc/os-release | cut -d '=' -f 2)
+              if [[ -z "${OS}" ]]; then OS=$(grep -E "^ID=" /etc/os-release | cut -d '=' -f 2); fi
+              if [[ "${OS}" == *"debian"* ]]; then
+                apt-get update -q -y && apt-get install -q -y open-iscsi
+              elif [[ "${OS}" == *"suse"* ]]; then
+                zypper --gpg-auto-import-keys -q refresh && zypper --gpg-auto-import-keys -q install -y open-iscsi
+              else
+                yum makecache -q -y && yum --setopt=tsflags=noscripts install -q -y iscsi-initiator-utils
+              fi
+              if [ $? -eq 0 ]; then
+                echo "iscsi install successfully"
+                systemctl enable iscsid && systemctl start iscsid || true
+              else
+                echo "iscsi utilities install failed error code $?"
+                exit 1
+              fi
+          securityContext:
+            privileged: true
+      containers:
+        - name: sleep
+          image: registry.k8s.io/pause:3.1
+      updateStrategy:
+        type: RollingUpdate
