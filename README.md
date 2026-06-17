@@ -10,6 +10,7 @@ GitHub (source of truth)
     ↓ ArgoCD 每 3 分鐘 poll
 k3s cluster
     ├── Cloudflare Tunnel → Traefik → 對外服務
+    ├── Longhorn → 分散式持久儲存（跨 node 複製）
     ├── Prometheus + node-exporter + kube-state-metrics
     └── Grafana (dashboard)
 ```
@@ -20,8 +21,25 @@ k3s cluster
 
 | 服務 | 網址 |
 |------|------|
-| Grafana | https://grafana.lab-hc.cloud |
-| ArgoCD  | https://argocd.lab-hc.cloud  |
+| Grafana  | https://grafana.lab-hc.cloud |
+| ArgoCD   | https://argocd.lab-hc.cloud  |
+| Longhorn | 透過 `kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80` 存取 |
+
+## Longhorn 前置準備
+
+**ArgoCD sync Longhorn 之前**，必須先在三台機器上安裝 `open-iscsi`：
+
+```bash
+# Rocky Linux / AlmaLinux（master + k3s-worker）
+dnf install -y iscsi-initiator-utils && systemctl enable --now iscsid
+
+# Debian（debian-worker）
+apt-get install -y open-iscsi && systemctl enable --now iscsid
+```
+
+確認全部安裝後再到 ArgoCD 手動 sync `longhorn` application。
+
+---
 
 ## 快速部署
 
