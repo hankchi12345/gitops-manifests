@@ -25,19 +25,11 @@ k3s cluster
 | ArgoCD   | https://argocd.lab-hc.cloud  |
 | Longhorn | 透過 `kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80` 存取 |
 
-## Longhorn 前置準備
+## Longhorn 儲存層
 
-**ArgoCD sync Longhorn 之前**，必須先在三台機器上安裝 `open-iscsi`：
+透過 `longhorn-prerequisite` ArgoCD Application 自動部署 iscsi-installer DaemonSet，依各節點 OS 自動安裝 open-iscsi（Rocky / AlmaLinux / Debian 均支援），無需手動 SSH。
 
-```bash
-# Rocky Linux / AlmaLinux（master + k3s-worker）
-dnf install -y iscsi-initiator-utils && systemctl enable --now iscsid
-
-# Debian（debian-worker）
-apt-get install -y open-iscsi && systemctl enable --now iscsid
-```
-
-確認全部安裝後再到 ArgoCD 手動 sync `longhorn` application。
+部署順序由 sync-wave 控制：`longhorn-prerequisite`（wave -1）→ `longhorn`（wave 0）。
 
 ---
 

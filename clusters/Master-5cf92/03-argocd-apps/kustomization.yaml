@@ -4,6 +4,7 @@ resources:
   - argocd-default-project.yaml
   - argocd-apps.yaml
   - argocd-ingress.yaml
+  - longhorn-prerequisite.yaml
   - longhorn.yaml
   - grafana.yaml
   - metube.yaml
