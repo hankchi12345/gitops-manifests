@@ -11,3 +11,4 @@ resources:
   - grafana.yaml
   - metube.yaml
   - prometheus.yaml
+  - pretend-aws.yaml
