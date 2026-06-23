@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: git@github.com:hankchi12345/pretend-AWS.git
+    repoURL: https://github.com/hankchi12345/pretend-AWS.git
     targetRevision: HEAD
     path: .
   destination:
