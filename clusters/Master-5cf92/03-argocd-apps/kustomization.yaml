@@ -9,6 +9,7 @@ resources:
   - longhorn.yaml
   - longhorn-ingress.yaml
   - grafana.yaml
+  - convertx.yaml
   - metube.yaml
   - prometheus.yaml
   - pretend-aws.yaml
