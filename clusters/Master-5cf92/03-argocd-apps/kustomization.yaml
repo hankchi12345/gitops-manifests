@@ -11,5 +11,6 @@ resources:
   - grafana.yaml
   - convertx.yaml
   - metube.yaml
+  - filecodebox.yaml
   - prometheus.yaml
   - pretend-aws.yaml
