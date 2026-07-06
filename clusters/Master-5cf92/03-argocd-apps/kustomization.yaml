@@ -13,3 +13,4 @@ resources:
   - metube.yaml
   - filecodebox.yaml
   - prometheus.yaml
+  - pretend-aws.yaml
