@@ -28,7 +28,7 @@ spec:
         args:
         - tunnel
         - "--protocol"
-        - http2
+        - http3
         - "--config"
         - /etc/cloudflare/config/config.yaml
         - "--metrics"
