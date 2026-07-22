@@ -4,7 +4,16 @@
 提供監控、Secret 管理、對外暴露等基礎設施，應用程式部署於各自的 repo。
 
 ## 架構
-[![K3s GitOps 平台架構圖](template/architecture/k3s-gitops-platform-architecture.png)](template/architecture/k3s-gitops-platform-architecture.png)
+
+### 部署流程（startformzero.sh / startworker.sh）
+[![部署流程圖](template/architecture/gitops_deploy_flow_master_worker.png)](template/architecture/gitops_deploy_flow_master_worker.png)
+
+### 目錄結構（template → clusters/<id>）
+[![目錄結構圖](template/architecture/gitops_template_to_clusters_structure.png)](template/architecture/gitops_template_to_clusters_structure.png)
+
+### 執行期架構（GitOps 同步 + namespace 拓樸）
+[![執行期架構圖](template/architecture/gitops_runtime_architecture_namespaces.png)](template/architecture/gitops_runtime_architecture_namespaces.png)
+
 ```
 GitHub (source of truth)
     ↓ ArgoCD 每 3 分鐘 poll
