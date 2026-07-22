@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO_URL="https://github.com/hankchi12345/gitops-manifests.git"
 REPO_DIR="/opt/gitops-manifests"
 
 # ── Colors ────────────────────────────────────────────────────────
@@ -18,6 +17,43 @@ wait_deploy() {
 
 # ── Root check ────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && die "Must run as root"
+
+# ── Repo URL ──────────────────────────────────────────────────────
+echo ""
+echo "此腳本會把 cluster 設定 commit + push 回你自己的 git repo。"
+echo "請先 Fork https://github.com/hankchi12345/gitops-manifests 到你自己的帳號,"
+echo "並在下面貼上 fork 後的 repo URL(不要用原作者的 repo,你不會有 push 權限)。"
+read -rp "你的 GitOps repo URL (e.g. https://github.com/<you>/gitops-manifests.git) : " REPO_URL
+[[ -z "$REPO_URL" ]] && die "Repo URL cannot be empty"
+read -rp  "GitHub username                    : " GITHUB_USER
+read -rsp "GitHub personal token              : " GITHUB_TOKEN; echo
+
+# Git credentials for this session (clone/pull/push) — never persisted to .git/config
+GIT_ASKPASS_SCRIPT=$(mktemp)
+trap 'rm -f "$GIT_ASKPASS_SCRIPT"' EXIT
+chmod 700 "$GIT_ASKPASS_SCRIPT"
+cat > "$GIT_ASKPASS_SCRIPT" << 'ASKPASS_EOF'
+#!/bin/bash
+case "$1" in
+  Username*) printf '%s' "$GIT_ASKPASS_USERNAME" ;;
+  Password*) printf '%s' "$GIT_ASKPASS_PASSWORD" ;;
+esac
+ASKPASS_EOF
+export GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"
+export GIT_ASKPASS_USERNAME="$GITHUB_USER"
+export GIT_ASKPASS_PASSWORD="$GITHUB_TOKEN"
+
+# ── Phase 4: Clone / pull repo ────────────────────────────────────
+# Runs before the interactive prompts so clusters/ reflects git state
+# when the user is asked to pick an existing Cluster ID below.
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  log "Phase 4: Cloning repo..."
+  git clone "$REPO_URL" "$REPO_DIR"
+else
+  log "Phase 4: Repo exists, syncing remote + pulling latest..."
+  git -C "$REPO_DIR" remote set-url origin "$REPO_URL"
+  git -C "$REPO_DIR" pull
+fi
 
 # ── Auto-generate node name: k3s-master-{last_octet}-{YY}-{M} ────
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
@@ -36,16 +72,58 @@ echo ""
 echo "  Detected IP  : ${LOCAL_IP}"
 echo "  Node name    : ${NODE_NAME}"
 echo ""
-read -rp  "Cluster name (e.g. m1, prod, lab) : " CLUSTER_NAME
-RANDOM_SUFFIX=$(openssl rand -hex 4 | head -c 5)
-CLUSTER_ID="${CLUSTER_NAME}-${RANDOM_SUFFIX}"
+echo "  1) 建立新 cluster"
+echo "  2) 使用既有 Cluster ID"
+read -rp "選擇 [1/2] : " CLUSTER_MODE_CHOICE
+
+case "$CLUSTER_MODE_CHOICE" in
+  1)
+    read -rp  "Cluster name (e.g. m1, prod, lab) : " CLUSTER_NAME
+    [[ -n "$CLUSTER_NAME" ]] || die "Cluster name cannot be empty"
+    RANDOM_SUFFIX=$(openssl rand -hex 4 | head -c 5)
+    CLUSTER_ID="${CLUSTER_NAME}-${RANDOM_SUFFIX}"
+    ;;
+  2)
+    mapfile -t EXISTING_CLUSTERS < <(find "$REPO_DIR/clusters" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+    [[ ${#EXISTING_CLUSTERS[@]} -eq 0 ]] && die "No existing clusters found under clusters/"
+    echo "  既有 Cluster:"
+    for i in "${!EXISTING_CLUSTERS[@]}"; do
+      printf "    %d) %s\n" "$((i + 1))" "${EXISTING_CLUSTERS[$i]}"
+    done
+    read -rp "選擇編號 : " CLUSTER_PICK
+    [[ "$CLUSTER_PICK" =~ ^[0-9]+$ ]] && (( CLUSTER_PICK >= 1 && CLUSTER_PICK <= ${#EXISTING_CLUSTERS[@]} )) \
+      || die "Invalid choice '$CLUSTER_PICK'"
+    CLUSTER_ID="${EXISTING_CLUSTERS[$((CLUSTER_PICK - 1))]}"
+    ;;
+  *)
+    die "Invalid choice '$CLUSTER_MODE_CHOICE': must be 1 or 2"
+    ;;
+esac
 echo "      → Cluster ID: ${CLUSTER_ID}"
 echo ""
-read -rp  "Grafana admin username             : " GRAFANA_USER
-read -rsp "Grafana admin password             : " GRAFANA_PASS; echo
-read -rsp "Cloudflare tunnel token            : " CF_TOKEN;     echo
-read -rp  "GitHub username                    : " GITHUB_USER
-read -rsp "GitHub personal token              : " GITHUB_TOKEN; echo
+
+read -rp "你的網域 (e.g. lab-hc.cloud, 對外服務會用 <sub>.<domain>) : " DOMAIN
+[[ -z "$DOMAIN" ]] && die "Domain cannot be empty"
+
+DEFAULT_SECRETS_DIR="/root/secrets-backup/$CLUSTER_ID"
+if [[ "$CLUSTER_MODE_CHOICE" == "2" ]]; then
+  read -rp "secrets-backup 路徑 [預設 $DEFAULT_SECRETS_DIR] : " SECRETS_DIR
+  SECRETS_DIR="${SECRETS_DIR:-$DEFAULT_SECRETS_DIR}"
+else
+  SECRETS_DIR="$DEFAULT_SECRETS_DIR"
+fi
+GRAFANA_SECRETS_FILE="$SECRETS_DIR/grafana-secrets.yaml"
+CLOUDFLARE_SECRETS_FILE="$SECRETS_DIR/cloudflare-secrets.yaml"
+
+if [[ -s "$GRAFANA_SECRETS_FILE" && -s "$CLOUDFLARE_SECRETS_FILE" ]]; then
+  log "沿用既有 secrets-backup: $SECRETS_DIR"
+  REUSE_SECRETS=true
+else
+  REUSE_SECRETS=false
+  read -rp  "Grafana admin username             : " GRAFANA_USER
+  read -rsp "Grafana admin password             : " GRAFANA_PASS; echo
+  read -rsp "Cloudflare tunnel token            : " CF_TOKEN;     echo
+fi
 echo ""
 
 CLUSTER_DIR="$REPO_DIR/clusters/$CLUSTER_ID"
@@ -60,20 +138,31 @@ nameserver 1.1.1.1
 nameserver 8.8.4.4
 EOF
 
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
 # ── Phase 1: k3s ─────────────────────────────────────────────────
-if ! command -v kubectl &>/dev/null; then
+if systemctl is-active --quiet k3s 2>/dev/null; then
+  log "Phase 1: k3s already running, skipping install"
+  warn "Phase 1: resolv-conf only takes effect at install time — restart k3s manually if DNS settings changed"
+elif [[ -x /usr/local/bin/k3s ]]; then
+  die "k3s is installed but the k3s service is not active — investigate with 'systemctl status k3s' before rerunning"
+else
   log "Phase 1: Installing k3s..."
   curl -sfL https://get.k3s.io | sh -s - server \
     --write-kubeconfig-mode 644 \
     --node-name "$NODE_NAME" \
     --resolv-conf /etc/k3s-resolv.conf
-  log "Waiting for node to be Ready..."
-  until kubectl get node 2>/dev/null | grep -q " Ready"; do sleep 3; done
-else
-  log "Phase 1: k3s already installed, skipping"
 fi
 
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+log "Waiting for node to be Ready..."
+WAIT_SECONDS=0
+until kubectl get node 2>/dev/null | grep -q " Ready"; do
+  sleep 3
+  WAIT_SECONDS=$((WAIT_SECONDS + 3))
+  if (( WAIT_SECONDS >= 180 )); then
+    die "Node not Ready after 180s — check k3s port (6443) and etcd/datastore health (journalctl -u k3s)"
+  fi
+done
 
 # ── Phase 2: Helm ─────────────────────────────────────────────────
 if ! command -v helm &>/dev/null; then
@@ -109,33 +198,46 @@ fi
 
 wait_deploy kube-system sealed-secrets
 
-# ── Phase 4: Clone / pull repo ────────────────────────────────────
-if [[ ! -d "$REPO_DIR/.git" ]]; then
-  log "Phase 4: Cloning repo..."
-  git clone "$REPO_URL" "$REPO_DIR"
+# Phase 4 (clone/pull repo) runs earlier, before the interactive prompts —
+# see below the root check — so clusters/ reflects git state before asking
+# the user to pick an existing Cluster ID.
+
+# ── Phase 5: Prepare cluster directory ────────────────────────────
+log "Phase 5: Preparing cluster directory clusters/$CLUSTER_ID ..."
+
+if [[ -d "$CLUSTER_DIR" ]]; then
+  [[ "$CLUSTER_MODE_CHOICE" == "2" ]] \
+    || die "clusters/$CLUSTER_ID already exists — pick a different cluster name or choose option 2"
+  log "Phase 5: Reusing existing directory, skipping template copy"
 else
-  log "Phase 4: Repo exists, pulling latest..."
-  git -C "$REPO_DIR" pull
+  [[ "$CLUSTER_MODE_CHOICE" == "1" ]] \
+    || die "clusters/$CLUSTER_ID not found"
+  mkdir -p "$CLUSTER_DIR"
+  cp -r "$REPO_DIR/template/." "$CLUSTER_DIR/"
+
+  # Substitute CLUSTER_ID placeholder in ArgoCD app files
+  sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/prometheus.yaml"
+  sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/grafana.yaml"
+
+  # Substitute DOMAIN placeholder across manifests that expose services externally
+  sed -i "s|DOMAIN|$DOMAIN|g" "$CLUSTER_DIR/00-base/cloudflare/cloudflare-configmap.yaml"
+  sed -i "s|DOMAIN|$DOMAIN|g" "$CLUSTER_DIR/02-helm-values/grafana/values.yaml"
+  sed -i "s|DOMAIN|$DOMAIN|g" "$CLUSTER_DIR/03-argocd-apps/argocd-ingress.yaml"
 fi
 
-# ── Phase 5: Create cluster directory from template ───────────────
-log "Phase 5: Creating cluster directory clusters/$CLUSTER_ID ..."
-mkdir -p "$REPO_DIR/clusters"
-cp -r "$REPO_DIR/template" "$CLUSTER_DIR"
-
-# Substitute CLUSTER_ID placeholder in ArgoCD app files
-sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/prometheus.yaml"
-sed -i "s|CLUSTER_ID|$CLUSTER_ID|g" "$CLUSTER_DIR/03-argocd-apps/grafana.yaml"
-
 # ── Phase 6: Create plaintext secrets (local only, never in git) ──
-log "Phase 6: Writing plaintext secrets to /root/secrets-backup/"
-mkdir -p /root/secrets-backup
+mkdir -p "$SECRETS_DIR"
 
-GRAFANA_USER_B64=$(printf '%s' "$GRAFANA_USER" | base64 -w 0)
-GRAFANA_PASS_B64=$(printf '%s' "$GRAFANA_PASS" | base64 -w 0)
-CF_TOKEN_B64=$(printf '%s' "$CF_TOKEN" | base64 -w 0)
+if [[ "$REUSE_SECRETS" == "true" ]]; then
+  log "Phase 6: Reusing existing plaintext secrets at $SECRETS_DIR/"
+else
+  log "Phase 6: Writing plaintext secrets to $SECRETS_DIR/"
 
-cat > /root/secrets-backup/grafana-secrets.yaml << EOF
+  GRAFANA_USER_B64=$(printf '%s' "$GRAFANA_USER" | base64 -w 0)
+  GRAFANA_PASS_B64=$(printf '%s' "$GRAFANA_PASS" | base64 -w 0)
+  CF_TOKEN_B64=$(printf '%s' "$CF_TOKEN" | base64 -w 0)
+
+  cat > "$GRAFANA_SECRETS_FILE" << EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -147,7 +249,7 @@ data:
   admin-password: ${GRAFANA_PASS_B64}
 EOF
 
-cat > /root/secrets-backup/cloudflare-secrets.yaml << EOF
+  cat > "$CLOUDFLARE_SECRETS_FILE" << EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -158,32 +260,38 @@ data:
   tunnel-token: ${CF_TOKEN_B64}
 EOF
 
-chmod 600 /root/secrets-backup/*.yaml
+  chmod 600 "$SECRETS_DIR"/*.yaml
+fi
 
 # ── Phase 7: Seal secrets into cluster directory ──────────────────
 log "Phase 7: Sealing secrets into clusters/$CLUSTER_ID ..."
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
-  < /root/secrets-backup/grafana-secrets.yaml \
+  < "$GRAFANA_SECRETS_FILE" \
   > "$CLUSTER_DIR/01-configs/grafana/sealed-secrets.yaml"
 
 kubeseal --format=yaml \
   --controller-name=sealed-secrets \
   --controller-namespace=kube-system \
-  < /root/secrets-backup/cloudflare-secrets.yaml \
+  < "$CLOUDFLARE_SECRETS_FILE" \
   > "$CLUSTER_DIR/00-base/cloudflare/cloudflare-sealed-secrets.yaml"
 
-# ── Phase 8: Push cluster directory to git ────────────────────────
-log "Phase 8: Pushing clusters/$CLUSTER_ID to git..."
+# ── Phase 8: Commit + push cluster directory to git ───────────────
+log "Phase 8: Committing clusters/$CLUSTER_ID ..."
 git -C "$REPO_DIR" config user.email "setup@k3s-bootstrap"
 git -C "$REPO_DIR" config user.name  "Bootstrap Script"
-git -C "$REPO_DIR" remote set-url origin \
-  "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/hankchi12345/gitops-manifests.git"
 
 git -C "$REPO_DIR" add "clusters/$CLUSTER_ID"
-git -C "$REPO_DIR" commit -m "chore: add cluster $CLUSTER_ID"
-git -C "$REPO_DIR" push
+git -C "$REPO_DIR" diff --cached --quiet \
+  || git -C "$REPO_DIR" commit -m "chore: bootstrap cluster $CLUSTER_ID"
+
+if [[ -n "$(git -C "$REPO_DIR" log '@{u}..HEAD' --oneline 2>/dev/null)" ]]; then
+  log "Phase 8: Pushing to git..."
+  git -C "$REPO_DIR" push
+else
+  log "Phase 8: Nothing to push"
+fi
 
 # ── Phase 9: Apply base infrastructure ───────────────────────────
 log "Phase 9: Applying base infrastructure..."
@@ -238,7 +346,11 @@ EOF
 
 # ── Phase 12: Deploy ArgoCD apps ─────────────────────────────────
 log "Phase 12: Deploying ArgoCD applications..."
-kubectl apply -f "$CLUSTER_DIR/03-argocd-apps/"
+if [[ -f "$CLUSTER_DIR/03-argocd-apps/kustomization.yaml" ]]; then
+  kubectl apply -k "$CLUSTER_DIR/03-argocd-apps/"
+else
+  kubectl apply -f "$CLUSTER_DIR/03-argocd-apps/"
+fi
 
 # ── Phase 13: Backup sealed secrets private key ───────────────────
 log "Phase 13: Backing up Sealed Secrets private key..."
@@ -256,11 +368,11 @@ echo "╔═══════════════════════�
 echo "║                  Setup Complete                      ║"
 echo "╠══════════════════════════════════════════════════════╣"
 printf  "║  Cluster ID  : %-37s║\n" "$CLUSTER_ID"
-printf  "║  ArgoCD      : %-37s║\n" "http://argocd.lab-hc.cloud"
-printf  "║  Grafana     : %-37s║\n" "http://grafana.lab-hc.cloud"
+printf  "║  ArgoCD      : %-37s║\n" "http://argocd.$DOMAIN"
+printf  "║  Grafana     : %-37s║\n" "http://grafana.$DOMAIN"
 printf  "║  ArgoCD pass : %-37s║\n" "$ARGOCD_PASS"
 echo "╠══════════════════════════════════════════════════════╣"
 echo "║  Keep these files safe (NOT in git):                 ║"
-echo "║    /root/secrets-backup/                             ║"
+printf  "║    %-50s║\n" "$SECRETS_DIR/"
 echo "║    /root/sealed-secrets-master-key-backup.yaml       ║"
 echo "╚══════════════════════════════════════════════════════╝"

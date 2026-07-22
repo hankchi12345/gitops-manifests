@@ -6,10 +6,10 @@ metadata:
 data:
   config.yaml: |
     ingress:
-      - hostname: "*.lab-hc.cloud"
+      - hostname: "*.DOMAIN"
         service: "http://traefik.kube-system.svc.cluster.local:80"
-    
-      - hostname: "lab-hc.cloud"
+
+      - hostname: "DOMAIN"
         service: "http://traefik.kube-system.svc.cluster.local:80"
 
       - service: "http_status:404"

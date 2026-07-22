@@ -25,4 +25,4 @@ ingress:
   enabled: true
   ingressClassName: traefik
   hosts:
-    - grafana.lab-hc.cloud
+    - grafana.DOMAIN
