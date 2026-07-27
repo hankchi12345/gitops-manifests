@@ -28,10 +28,12 @@ k3s cluster
 
 ## 平台服務網址
 
+網域是部署時互動輸入的（見下方「快速部署」），以下用 `<domain>` 代表你輸入的值：
+
 | 服務 | 網址 |
 |------|------|
-| Grafana  | https://grafana.lab-hc.cloud |
-| ArgoCD   | https://argocd.lab-hc.cloud  |
+| Grafana  | https://grafana.\<domain\> |
+| ArgoCD   | https://argocd.\<domain\>  |
 | Longhorn | 透過 `kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80` 存取 |
 
 ## Longhorn 儲存層
@@ -70,6 +72,7 @@ Script 會互動式詢問以下資訊，其餘全自動：
 | 輸入 | 說明 |
 |------|------|
 | Cluster name | 自定義名稱（e.g. `m1`, `prod`），script 自動附加 5 碼隨機 ID，例如 `m1-a3k9x` |
+| 網域 | 你自己的網域（e.g. `lab-hc.cloud`），對外服務會用 `<服務>.<網域>` |
 | Grafana 帳號 / 密碼 | 輸入明文，script 自動轉 base64 |
 | Cloudflare tunnel token | 從 Cloudflare Zero Trust 後台取得，貼上原始 token |
 | GitHub username / token | 用於 ArgoCD 連接此 repo（token 需有 `repo` 讀取權限） |

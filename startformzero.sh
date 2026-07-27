@@ -102,8 +102,17 @@ esac
 echo "      → Cluster ID: ${CLUSTER_ID}"
 echo ""
 
-read -rp "你的網域 (e.g. lab-hc.cloud, 對外服務會用 <sub>.<domain>) : " DOMAIN
-[[ -z "$DOMAIN" ]] && die "Domain cannot be empty"
+CLUSTER_DIR="$REPO_DIR/clusters/$CLUSTER_ID"
+
+if [[ "$CLUSTER_MODE_CHOICE" == "2" ]]; then
+  EXISTING_INGRESS="$CLUSTER_DIR/03-argocd-apps/argocd-ingress.yaml"
+  DOMAIN=$(sed -n 's/.*host: *argocd\.\(.*\)/\1/p' "$EXISTING_INGRESS" 2>/dev/null | head -1)
+  [[ -z "$DOMAIN" ]] && die "無法從 $EXISTING_INGRESS 讀出網域,請手動檢查該檔案"
+  log "沿用既有網域: $DOMAIN"
+else
+  read -rp "你的網域 (e.g. lab-hc.cloud, 對外服務會用 <sub>.<domain>) : " DOMAIN
+  [[ -z "$DOMAIN" ]] && die "Domain cannot be empty"
+fi
 
 DEFAULT_SECRETS_DIR="/root/secrets-backup/$CLUSTER_ID"
 if [[ "$CLUSTER_MODE_CHOICE" == "2" ]]; then
@@ -125,8 +134,6 @@ else
   read -rsp "Cloudflare tunnel token            : " CF_TOKEN;     echo
 fi
 echo ""
-
-CLUSTER_DIR="$REPO_DIR/clusters/$CLUSTER_ID"
 
 # ── Phase 0: Hostname + DNS ───────────────────────────────────────
 log "Phase 0: Setting hostname to ${NODE_NAME}"
@@ -264,18 +271,35 @@ EOF
 fi
 
 # ── Phase 7: Seal secrets into cluster directory ──────────────────
+# A sealed-secrets.yaml that differs from the template placeholder has
+# already been claimed/sealed for a real cluster — never overwrite it.
+# This is what protects a wrong-cluster pick (fat-finger on option 2, or
+# running on the wrong machine) from re-sealing with THIS machine's key
+# and pushing that over another cluster's real secret.
 log "Phase 7: Sealing secrets into clusters/$CLUSTER_ID ..."
-kubeseal --format=yaml \
-  --controller-name=sealed-secrets \
-  --controller-namespace=kube-system \
-  < "$GRAFANA_SECRETS_FILE" \
-  > "$CLUSTER_DIR/01-configs/grafana/sealed-secrets.yaml"
 
-kubeseal --format=yaml \
-  --controller-name=sealed-secrets \
-  --controller-namespace=kube-system \
-  < "$CLOUDFLARE_SECRETS_FILE" \
-  > "$CLUSTER_DIR/00-base/cloudflare/cloudflare-sealed-secrets.yaml"
+seal_if_unclaimed() {
+  local plaintext_file=$1 dest_file=$2 template_file=$3
+  if [[ -f "$dest_file" ]] && ! cmp -s "$dest_file" "$template_file"; then
+    log "Phase 7: $dest_file already sealed for a real cluster, not touching it"
+    return
+  fi
+  kubeseal --format=yaml \
+    --controller-name=sealed-secrets \
+    --controller-namespace=kube-system \
+    < "$plaintext_file" \
+    > "$dest_file"
+}
+
+seal_if_unclaimed \
+  "$GRAFANA_SECRETS_FILE" \
+  "$CLUSTER_DIR/01-configs/grafana/sealed-secrets.yaml" \
+  "$REPO_DIR/template/01-configs/grafana/sealed-secrets.yaml"
+
+seal_if_unclaimed \
+  "$CLOUDFLARE_SECRETS_FILE" \
+  "$CLUSTER_DIR/00-base/cloudflare/cloudflare-sealed-secrets.yaml" \
+  "$REPO_DIR/template/00-base/cloudflare/cloudflare-sealed-secrets.yaml"
 
 # ── Phase 8: Commit + push cluster directory to git ───────────────
 log "Phase 8: Committing clusters/$CLUSTER_ID ..."
@@ -309,7 +333,14 @@ if ! kubectl get namespace argocd &>/dev/null; then
     -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
   log "Phase 10: Waiting for ArgoCD CRDs..."
-  until kubectl get crd applications.argoproj.io &>/dev/null; do sleep 3; done
+  CRD_WAIT_SECONDS=0
+  until kubectl get crd applications.argoproj.io &>/dev/null; do
+    sleep 3
+    CRD_WAIT_SECONDS=$((CRD_WAIT_SECONDS + 3))
+    if (( CRD_WAIT_SECONDS >= 180 )); then
+      die "ArgoCD CRDs not registered after 180s — check 'kubectl get pods -n argocd' and the install.yaml apply"
+    fi
+  done
   sleep 10
 
   log "Phase 10: Restarting applicationset-controller (CRD race fix)..."
