@@ -14,3 +14,4 @@ resources:
   - pingvin-share.yaml
   - prometheus.yaml
   - pretend-aws.yaml
+  - oracle-free.yaml
