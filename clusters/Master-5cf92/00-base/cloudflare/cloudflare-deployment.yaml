@@ -24,7 +24,7 @@ spec:
 
       containers:
       - name: cloudflare
-        image: cloudflare/cloudflared:2025.4.0
+        image: cloudflare/cloudflared:2026.9.1
         args:
         - tunnel
         - "--protocol"
