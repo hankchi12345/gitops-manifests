@@ -26,14 +26,14 @@ spec:
       - name: cloudflare
         image: cloudflare/cloudflared:2026.9.1
         args:
-        - tunnel
-        - run
-        - "--protocol"
-        - "quic"
         - "--config"
         - /etc/cloudflare/config/config.yaml
+        - "--protocol"
+        - "quic"
         - "--metrics"
         - "0.0.0.0:2000"
+        - tunnel
+        - run
 
         env:
         - name: TUNNEL_TOKEN
