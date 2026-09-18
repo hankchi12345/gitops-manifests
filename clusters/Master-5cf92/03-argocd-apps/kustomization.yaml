@@ -15,3 +15,4 @@ resources:
   - prometheus.yaml
   - pretend-aws.yaml
   - oracle-free.yaml
+  - ingressroute.yaml
