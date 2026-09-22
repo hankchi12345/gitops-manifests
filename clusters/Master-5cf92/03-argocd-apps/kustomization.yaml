@@ -16,3 +16,5 @@ resources:
   - pretend-aws.yaml
   - oracle-free.yaml
   - ingressroute.yaml
+  - podinfo.yaml
+  - blackbox.yaml

@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: blackbox
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hankchi12345/app-manifests.git
+    targetRevision: HEAD
+    path: blackbox
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observation
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
