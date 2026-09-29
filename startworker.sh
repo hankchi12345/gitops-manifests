@@ -43,11 +43,15 @@ nameserver 8.8.4.4
 EOF
 
 # ── Phase 1: Install k3s agent ───────────────────────────────────
+TARGET_K3S_VERSION="v1.35.5+k3s1"
+
 if systemctl is-active --quiet k3s-agent 2>/dev/null; then
   log "Phase 1: k3s-agent already running, skipping"
 else
-  log "Phase 1: Installing k3s agent and joining cluster..."
-  curl -sfL https://get.k3s.io | K3S_URL="https://${MASTER_IP}:6443" \
+  log "Phase 1: Installing k3s agent (${TARGET_K3S_VERSION}) and joining cluster..."
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="${TARGET_K3S_VERSION}" \
+    K3S_URL="https://${MASTER_IP}:6443" \
     K3S_TOKEN="${K3S_TOKEN}" \
     sh -s - agent \
       --node-name "${NODE_NAME}" \
