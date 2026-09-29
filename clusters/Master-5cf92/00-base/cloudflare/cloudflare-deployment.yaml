@@ -24,7 +24,7 @@ spec:
 
       containers:
       - name: cloudflare
-        image: cloudflare/cloudflared:2026.9.1
+        image: cloudflare/cloudflared:2026.9.3
         args:
         - "--config"
         - /etc/cloudflare/config/config.yaml
